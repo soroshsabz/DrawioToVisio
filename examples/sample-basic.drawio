@@ -1,0 +1,28 @@
+<mxfile host="app.diagrams.net" version="24.7.16">
+  <diagram name="test" id="test1">
+    <mxGraphModel dx="800" dy="600" grid="0" page="1" pageWidth="850" pageHeight="600">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="c1" value="Outer Container" style="rounded=1;fillColor=#f5f4f2;strokeColor=#9e9892;verticalAlign=top;align=left;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="400" height="300" as="geometry"/>
+        </mxCell>
+        <mxCell id="c2" value="Inner Zone" style="rounded=1;fillColor=#e4e1dd;strokeColor=#2d5967;dashed=1;verticalAlign=top;align=left;fontSize=12" vertex="1" parent="c1">
+          <mxGeometry x="20" y="40" width="200" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="s1" value="Box A" style="rounded=0;fillColor=#2d5967;strokeColor=none;fontColor=#ffffff" vertex="1" parent="c2">
+          <mxGeometry x="20" y="40" width="120" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="s2" value="Ellipse B" style="ellipse;fillColor=#ffffff;strokeColor=#2d5967" vertex="1" parent="c2">
+          <mxGeometry x="40" y="130" width="100" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="s3" value="" style="shape=stencil(vVNhD4IgEP01fNQhbJmfrf4HS1QWgTsp7d+HwUol12ab3467d7x7Bw/RvK1ZwxHBrQF94Z0oTI3oAREiVM1BGBshekQ0LzXwCvRNFe7csAE5RFd9H27oXR8eOgh+uFOWxYS+MicHZnC2VfDgJN6lDg++AcepzwQQj0iwp+gj1os2Am2YEVpN6CWDikeWLColqyaltuO8CdJ+PCnUSEu2jyn9Sr5aDV7azwZy5uTv6daqCfez2dME3+K/d1lYzAZCfvjFBh+nlUJKZ9Rxfe5Mm3Kupscn);fillColor=#2d5967;strokeColor=none" vertex="1" parent="c1">
+          <mxGeometry x="260" y="60" width="100" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" style="endArrow=block;strokeColor=#312d2a;strokeWidth=2" edge="1" parent="1" source="s1" target="s3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
