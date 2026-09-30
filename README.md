@@ -76,6 +76,9 @@ python drawio2visio.py examples/sample-basic.drawio output.vsdx
 
 # Extract every icon into a stencil set
 python drawio2stencils.py examples/sample-basic.drawio icons.vssx
+
+# Preview a stencil set as an annotated contact sheet
+python verify_sheet.py icons.vssx icons-sheet.png
 ```
 
 Open the `.vsdx` in Visio — everything is editable. Open the `.vssx` from
@@ -87,6 +90,7 @@ Visio's *More Shapes* menu to drag-drop the extracted icons anywhere.
 |---|---|
 | `drawio2visio.py` | Convert a `.drawio` diagram to an editable `.vsdx` |
 | `drawio2stencils.py` | Extract all icons into a `.vssx` stencil set |
+| `verify_sheet.py` | Render a `.vssx` as a labeled contact-sheet PNG for review |
 
 ```text
 python drawio2visio.py input.drawio output.vsdx
