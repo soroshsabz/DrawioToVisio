@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import urllib.parse
+import shutil
 import zlib
 
 import win32com.client
@@ -342,7 +343,47 @@ def main(src=SRC, out=OUT):
         doc.Close()
     finally:
         app.Quit()
+
+    # Post-process: Visio saves stencil docs with a windows.xml that has no
+    # Stencil window, so double-clicking the .vssx opens an EMPTY drawing
+    # with "There are no stencils open". Inject a docked Stencil window
+    # pointing at the file itself so it opens correctly for the user.
+    try:
+        _inject_stencil_window(os.path.abspath(out), os.path.basename(out))
+    except PermissionError:
+        # target locked (open in Visio/Explorer preview) - save beside it
+        alt = os.path.splitext(out)[0] + ".fixed.vssx"
+        shutil.move(out + ".tmp", alt)
+        _inject_stencil_window(alt, os.path.basename(alt))
+        print(f"WARNING: {out} was locked - wrote {alt} instead")
+        out = alt
     print("saved:", out)
+
+
+def _inject_stencil_window(path, own_name):
+    """Make the .vssx open like Microsoft's own stencils: double-click shows
+    a blank drawing with the stencil DOCKED LEFT in the Shapes pane.
+    Discovered by A/B test against ANALYTICS_U.vssx: MS ships an EMPTY
+    <Windows/> element. Any Drawing/Stencil window declaration in a stencil's
+    windows.xml makes Visio open the file as a read-only drawing with
+    'There are no stencils open' instead of docking the panel."""
+    import zipfile
+    tmp = path + ".tmp"
+    zin = zipfile.ZipFile(path)
+    zout = zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED)
+    for item in zin.infolist():
+        data = zin.read(item.filename)
+        if item.filename == "visio/windows.xml":
+            s = ("<?xml version='1.0' encoding='utf-8' ?>\r\n"
+                 "<Windows ClientWidth='0' ClientHeight='0' "
+                 "xmlns='http://schemas.microsoft.com/office/visio/2012/main' "
+                 "xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006"
+                 "/relationships' xml:space='preserve'/>")
+            data = s.encode("utf-8")
+        zout.writestr(item, data)
+    zout.close()
+    zin.close()
+    os.replace(tmp, path)
 
 
 if __name__ == "__main__":

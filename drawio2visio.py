@@ -718,7 +718,19 @@ def cell_hole_ids(cells):
 
 # ---------------------------------------------------------------- main
 
-def main(src_path=SRC, out_path=OUT):
+def main(src_path=SRC, out_path=OUT, stencil_vssx=None):
+    """Convert a draw.io file to Visio. When `stencil_vssx` is given, the
+    pipeline is:
+      1. extract every icon into a named, de-duplicated .vssx stencil set
+         (same engine as drawio2stencils.py)
+      2. dock that stencil set and build the final diagram by DROPping the
+         masters - each icon in the output is a single editable master
+         instance instead of many loose polylines.
+    Without it, the classic inline-geometry conversion runs (default)."""
+    if stencil_vssx:
+        from drawio2stencils import (collect, clusters_of, dedupe,
+                                     name_cluster, draw_cluster_into)
+
     cells = load_cells(src_path)
     offsets = build_offsets(cells)
 
@@ -732,6 +744,59 @@ def main(src_path=SRC, out_path=OUT):
     print(f"canvas: {max_x:.0f} x {max_y:.0f} px")
 
     b = VisioBuilder(max_x + 10, max_y + 10)
+
+    # ---- STEP 1 (optional): build the stencil set and cluster the icons --
+    member_of = {}       # cell id -> (master name, cluster bbox)
+    if stencil_vssx:
+        from drawio2stencils import (collect, clusters_of, dedupe,
+                                     name_cluster, draw_cluster_into)
+        icon_cells, labels2 = collect(cells, offsets)
+        clusters = clusters_of(icon_cells)
+        uniq = dedupe(clusters)
+        print(f"step 1: unique stencil masters = {len(uniq)}")
+
+        used_names = {}
+        master_of_cluster = []  # (cluster, master name)
+        for idx, cl in enumerate(uniq):
+            cl_sorted = sorted(
+                cl, key=lambda mm: -(mm["rect"][2] * mm["rect"][3]))
+            name = name_cluster(cl, labels2) or f"Icon {idx + 1}"
+            base, k = name, 2
+            while name in used_names:
+                name = f"{base} {k}"
+                k += 1
+            used_names[name] = True
+            master_of_cluster.append((cl_sorted, name))
+
+        stencil_doc = b.app.Documents.AddEx("", 4, 0, 0)
+        stencil_doc.Title = os.path.splitext(
+            os.path.basename(stencil_vssx))[0]
+        for cl_sorted, name in master_of_cluster:
+            master = stencil_doc.Masters.Add()
+            master.Name = name
+            editor = master.Open()
+            try:
+                draw_cluster_into(editor, cl_sorted, cells, offsets)
+            finally:
+                editor.Close()
+        stencil_doc.SaveAs(os.path.abspath(stencil_vssx))
+        print(f"step 1 done: {stencil_doc.Masters.Count} masters "
+              f"-> {stencil_vssx}")
+
+        # map every member cell id -> its cluster (by cluster index)
+        cluster_of_cell = {}
+        for ci, (cl_sorted, name) in enumerate(master_of_cluster):
+            for mm in cl_sorted:
+                cluster_of_cell[mm["id"]] = ci
+        # cluster bbox in canvas coords
+        cluster_bbox = {}
+        for ci, (cl_sorted, name) in enumerate(master_of_cluster):
+            bx0 = min(mm["rect"][0] for mm in cl_sorted)
+            by0 = min(mm["rect"][1] for mm in cl_sorted)
+            bx1 = max(mm["rect"][0] + mm["rect"][2] for mm in cl_sorted)
+            by1 = max(mm["rect"][1] + mm["rect"][3] for mm in cl_sorted)
+            cluster_bbox[ci] = (bx0, by0, bx1 - bx0, by1 - by0)
+        member_of = cluster_of_cell
 
     hole_ids = cell_hole_ids(cells)
 
@@ -763,7 +828,26 @@ def main(src_path=SRC, out_path=OUT):
 
     n_v = n_t = n_e = n_fail = 0
     try:
+        if stencil_vssx:
+            st = b.app.Documents.OpenEx(os.path.abspath(stencil_vssx), 4)
+        dropped_clusters = set()
+
         for c in ordered:
+            # ---- STEP 2: when the first member of an icon cluster comes up
+            # in z-order, drop its master here (preserves stacking) -------
+            ci = member_of.get(c["id"]) if stencil_vssx else None
+            if ci is not None and ci not in dropped_clusters:
+                dropped_clusters.add(ci)
+                bx, by, bw2, bh2 = cluster_bbox[ci]
+                m = st.Masters.ItemU(master_of_cluster[ci][1])
+                shp = b.page.Drop(m, b.X(bx + bw2 / 2), b.Y(by + bh2 / 2))
+                shp.Cells("PinX").FormulaU = f"{b.X(bx + bw2 / 2):.4f} in"
+                shp.Cells("PinY").FormulaU = f"{b.Y(by + bh2 / 2):.4f} in"
+                shp.Cells("Width").FormulaU = f"{bw2 / PPI:.4f} in"
+                shp.Cells("Height").FormulaU = f"{bh2 / PPI:.4f} in"
+                n_v += 1
+            if ci is not None:
+                continue  # member cell - replaced by its master instance
             style = parse_style(c["style"])
             if c["vertex"]:
                 r = rect_of(c, offsets)
@@ -910,6 +994,13 @@ def main(src_path=SRC, out_path=OUT):
                         shp.Cells("BeginArrow").FormulaU = "5"
                     n_e += 1
 
+        if stencil_vssx:
+            from drawio2stencils import _inject_stencil_window
+            try:
+                _inject_stencil_window(os.path.abspath(stencil_vssx),
+                                       os.path.basename(stencil_vssx))
+            except (PermissionError, OSError) as e:
+                print(f"note: stencil window injection skipped ({e})")
         b.save(out_path)
     finally:
         b.quit()
@@ -924,7 +1015,8 @@ if __name__ == "__main__":
     import sys as _sys
     _src = os.path.abspath(_sys.argv[1] if len(_sys.argv) > 1 else SRC)
     _out = os.path.abspath(_sys.argv[2] if len(_sys.argv) > 2 else OUT)
+    _vssx = os.path.abspath(_sys.argv[3]) if len(_sys.argv) > 3 else None
     _cells = load_cells(_src)
     cells_by_id = {c["id"]: c for c in _cells}
     main.__globals__["load_cells"] = lambda path: _cells
-    main(_src, _out)
+    main(_src, _out, _vssx)
