@@ -1,0 +1,11 @@
+[run]
+include =
+    src/drawio_to_visio/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if win32com is None
+    except ImportError
+    def main
+    if __name__ == .__main__.:
