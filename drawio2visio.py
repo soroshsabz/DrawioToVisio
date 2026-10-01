@@ -247,15 +247,17 @@ def stencil_primitives(shape_el, style_fill, style_stroke):
     def walk_section(sec):
         subpaths = []
         cur, start, closed = [], None, False
+        segcur = []
         fill_on, stroke_on = False, False
         fc, sc = style_fill, style_stroke
         alpha = 1.0
 
         def flush_subpath():
-            nonlocal cur, start, closed
+            nonlocal cur, start, closed, segcur
             if len(cur) >= 2:
-                subpaths.append((list(cur), closed))
+                subpaths.append((list(cur), closed, list(segcur)))
             cur, start, closed = [], None, False
+            segcur = []
 
         def emit(fill_on, stroke_on, fc, sc, alpha):
             flush_subpath()
@@ -269,18 +271,20 @@ def stencil_primitives(shape_el, style_fill, style_stroke):
             if filled and len(subpaths) == 1:
                 prims.append({"kind": "poly", "subpaths": [list(subpaths[0][0])],
                               "closed": subpaths[0][1],
+                              "segs": [subpaths[0][2]],
                               "fill": fc if filled else None,
                               "stroke": sc if stroked else None, "alpha": alpha})
             else:
                 prims.append({"kind": "compound",
-                              "subpaths": [list(p) for p, _ in subpaths],
-                              "closeds": [c for _, c in subpaths],
+                              "subpaths": [list(p) for p, _, _ in subpaths],
+                              "closeds": [c for _, c, _ in subpaths],
+                              "segs": [s for _, _, s in subpaths],
                               "fill": fc if filled else None,
                               "stroke": sc if stroked else None, "alpha": alpha})
             subpaths.clear()
 
         def walk(node):
-            nonlocal cur, start, closed, fill_on, stroke_on, fc, sc, alpha
+            nonlocal cur, start, closed, segcur, fill_on, stroke_on, fc, sc, alpha
             for ch in node:
                 tag = ch.tag
                 if tag == "path":
@@ -291,11 +295,14 @@ def stencil_primitives(shape_el, style_fill, style_stroke):
                     x = float(ch.get("x", 0) or 0)
                     y = float(ch.get("y", 0) or 0)
                     cur = [(x, y)]
+                    segcur = [("M", x, y)]
                     start = (x, y)
                     closed = False
                 elif tag == "line":
-                    cur.append((float(ch.get("x", 0) or 0),
-                                float(ch.get("y", 0) or 0)))
+                    x = float(ch.get("x", 0) or 0)
+                    y = float(ch.get("y", 0) or 0)
+                    cur.append((x, y))
+                    segcur.append(("L", x, y))
                 elif tag == "curve":
                     x1 = float(ch.get("x1", 0) or 0)
                     y1 = float(ch.get("y1", 0) or 0)
@@ -305,8 +312,9 @@ def stencil_primitives(shape_el, style_fill, style_stroke):
                     y3 = float(ch.get("y3", 0) or 0)
                     if cur:
                         p0 = cur[-1]
-                        for i in range(1, 13):
-                            t = i / 12.0
+                        segcur.append(("C", x1, y1, x2, y2, x3, y3))
+                        for i in range(1, 49):
+                            t = i / 48.0
                             mt = 1 - t
                             bx = mt**3 * p0[0] + 3 * mt * mt * t * x1 + \
                                 3 * mt * t * t * x2 + t**3 * x3
@@ -320,8 +328,14 @@ def stencil_primitives(shape_el, style_fill, style_stroke):
                     y3 = float(ch.get("y3", 0) or 0)
                     if cur:
                         p0 = cur[-1]
-                        for i in range(1, 13):
-                            t = i / 12.0
+                        # promote quadratic to cubic
+                        cx = 2.0/3.0 * x1 + 1.0/3.0 * p0[0]
+                        cy = 2.0/3.0 * y1 + 1.0/3.0 * p0[1]
+                        cx2 = 2.0/3.0 * x1 + 1.0/3.0 * x3
+                        cy2 = 2.0/3.0 * y1 + 1.0/3.0 * y3
+                        segcur.append(("C", cx, cy, cx2, cy2, x3, y3))
+                        for i in range(1, 49):
+                            t = i / 48.0
                             mt = 1 - t
                             bx = mt * mt * p0[0] + 2 * mt * t * x1 + t * t * x3
                             by = mt * mt * p0[1] + 2 * mt * t * y1 + t * t * y3
@@ -341,6 +355,7 @@ def stencil_primitives(shape_el, style_fill, style_stroke):
                 elif tag == "close":
                     if start:
                         cur.append(start)
+                        segcur.append(("L", start[0], start[1]))
                     closed = True
                 elif tag in ("rect", "roundrect"):
                     emit(fill_on, stroke_on, fc, sc, alpha)
@@ -403,19 +418,40 @@ def stencil_primitives(shape_el, style_fill, style_stroke):
     return prims, (W, H)
 
 
+def transform_segs(segs, tx):
+    out = []
+    for s in segs:
+        if s[0] in ("M", "L"):
+            x, y = tx(s[1], s[2])
+            out.append((s[0], x, y))
+        elif s[0] == "C":
+            a, b = tx(s[1], s[2]); c, d = tx(s[3], s[4]); e, f = tx(s[5], s[6])
+            out.append(("C", a, b, c, d, e, f))
+        else:
+            out.append(s)
+    return out
+
+
 def scale_shift_prim(p, sx, sy, subsc):
     def tx(px, py):
         return (sx + px * subsc, sy + py * subsc)
     if p["kind"] == "poly":
-        return {"kind": "poly",
-                "subpaths": [[tx(a, b) for a, b in p["subpaths"][0]]],
-                "closed": p["closed"], "fill": p["fill"], "stroke": p["stroke"],
-                "alpha": p.get("alpha", 1)}
+        sp0, cl0, sg0 = p["subpaths"][0], p["closed"], p.get("segs")
+        nsegs = {"kind": "poly",
+                 "subpaths": [[tx(a, b) for a, b in sp0]],
+                 "closed": cl0, "fill": p["fill"], "stroke": p["stroke"],
+                 "alpha": p.get("alpha", 1)}
+        if sg0:
+            nsegs["segs"] = [transform_segs(sg0, tx)]
+        return nsegs
     if p["kind"] == "compound":
-        return {"kind": "compound",
-                "subpaths": [[tx(a, b) for a, b in sp] for sp in p["subpaths"]],
-                "closeds": p["closeds"], "fill": p["fill"], "stroke": p["stroke"],
-                "alpha": p.get("alpha", 1)}
+        q = {"kind": "compound",
+             "subpaths": [[tx(a, b) for a, b in sp] for sp in p["subpaths"]],
+             "closeds": p["closeds"], "fill": p["fill"], "stroke": p["stroke"],
+             "alpha": p.get("alpha", 1)}
+        if p.get("segs"):
+            q["segs"] = [transform_segs(sg, tx) for sg in p["segs"]]
+        return q
     q = dict(p)
     qx, qy = tx(p["x"], p["y"])
     q["x"], q["y"] = qx, qy
@@ -466,10 +502,25 @@ class VisioBuilder:
 
     def _poly_shape(self, pts, closed):
         arr = []
+        last = None
         for px, py in pts:
-            arr.append(self.X(px))
-            arr.append(self.Y(py))
-        return self.page.DrawPolyline(arr, 0)
+            cur = (self.X(px), self.Y(py))
+            if last is not None and abs(cur[0]-last[0]) < 1e-6 and abs(cur[1]-last[1]) < 1e-6:
+                continue
+            arr.append(cur[0]); arr.append(cur[1]); last = cur
+        try:
+            return self.page.DrawPolyline(arr, 0)
+        except Exception:
+            if len(arr) <= 8:
+                raise
+            pts2 = list(zip(arr[0::2], arr[1::2]))[::2]
+            arr = [c for pt in pts2 for c in pt]
+            try:
+                return self.page.DrawPolyline(arr, 0)
+            except Exception:
+                pts2 = pts2[::2]
+                arr = [c for pt in pts2 for c in pt]
+                return self.page.DrawPolyline(arr, 0)
 
     def poly(self, subpaths, closed, fill, stroke, sw, dashed, alpha=1.0):
         pts = subpaths[0]
@@ -776,7 +827,7 @@ def main(src_path=SRC, out_path=OUT, stencil_vssx=None):
             master.Name = name
             editor = master.Open()
             try:
-                draw_cluster_into(editor, cl_sorted, cells, offsets)
+                draw_cluster_into(editor, cl_sorted, cells, offsets, b.app)
             finally:
                 editor.Close()
         stencil_doc.SaveAs(os.path.abspath(stencil_vssx))
@@ -847,6 +898,19 @@ def main(src_path=SRC, out_path=OUT, stencil_vssx=None):
                 shp.Cells("Height").FormulaU = f"{bh2 / PPI:.4f} in"
                 n_v += 1
             if ci is not None:
+                # member cell graphics are replaced by its master instance,
+                # but its TEXT label must still be rendered (icon labels like
+                # "Palantir / on-premises / agent" live on cluster cells)
+                lbl = c.get("label")
+                if lbl:
+                    mstyle = parse_style(c["style"])
+                    minfo = parse_label(lbl, mstyle)
+                    if minfo["text"]:
+                        mr = rect_of(c, offsets)
+                        if mr and mr[2] > 0 and mr[3] > 0:
+                            b.text(mr[0], mr[1], mr[2], mr[3], minfo,
+                                   mstyle.get("verticalAlign"))
+                            n_t += 1
                 continue  # member cell - replaced by its master instance
             style = parse_style(c["style"])
             if c["vertex"]:

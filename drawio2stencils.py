@@ -49,7 +49,7 @@ def collect(cells, offsets):
             continue
         x, y, w, h = r
         mm = re.search(r"stencil\((.+?)\)", c["style"], re.S)
-        if mm and 12 <= w <= 140 and 12 <= h <= 140:
+        if mm and 1 <= w <= 150 and 1 <= h <= 150:
             sig = hashlib.md5(mm.group(1).encode()).hexdigest()[:10]
             style = d2v.parse_style(c["style"])
             icon_cells.append({"id": c["id"], "rect": r, "sig": sig,
@@ -126,7 +126,7 @@ def name_cluster(cl, labels):
 
 # --------------------------------------------------------------- master draw
 
-def draw_cluster_into(editor, cl, cells, offsets):
+def draw_cluster_into(editor, cl, cells, offsets, app=None):
     """Draw one icon cluster's cells (big-containers-first order) into a
     master editor page, normalised to the master box."""
     x0 = min(c["rect"][0] for c in cl)
@@ -160,21 +160,128 @@ def draw_cluster_into(editor, cl, cells, offsets):
             shp.Cells("FillPattern").FormulaU = "0"
         if stroke:
             shp.Cells("LineColor").FormulaU = rgb(stroke)
-            shp.Cells("LineWeight").FormulaU = \
-                f"{max(sw * 0.75, 0.5):.2f} pt"
+            base = max(sw * 0.75, 0.5)
+            # scale line weight with instance height so strokes stay crisp
+            # when masters are dropped smaller than MASTER_H (0.85 in)
+            shp.Cells("LineWeight").FormulaU = (
+                f"MAX({base:.2f} pt * Height/0.85 in, 0.35 pt)")
         else:
             shp.Cells("LinePattern").FormulaU = "0"
         if dashed:
             shp.Cells("LinePattern").FormulaU = "2"
 
-    def poly_shape(pts):
+    def map_pt(px, py):
+        return (X(px), Y(py))
+
+    def bezier_shape(segs):
+        """Real cubic-bezier geometry via DrawBezier (analytically smooth at
+        any zoom). segs: ('M'|'L', x, y) / ('C', x1,y1,x2,y2,x3,y3) in
+        stencil coords; loop assumed closed back to the first point.
+        'L' segments are emitted as proper cubics with control points at
+        1/3 and 2/3 along the line (repeated endpoints create degenerate
+        NURBS artifacts in Visio)."""
+        # build point list with a running current position
+        pts = []
+        cur = None
+        first = None
+        for s in segs:
+            if s[0] == "M":
+                cur = map_pt(s[1], s[2])
+                if first is None:
+                    first = cur
+                pts.append(cur)
+            elif s[0] == "L":
+                nxt = map_pt(s[1], s[2])
+                if cur is not None:
+                    pts.extend([(cur[0] + (nxt[0]-cur[0])/3.0,
+                                 cur[1] + (nxt[1]-cur[1])/3.0),
+                                (cur[0] + 2*(nxt[0]-cur[0])/3.0,
+                                 cur[1] + 2*(nxt[1]-cur[1])/3.0)])
+                pts.append(nxt)
+                cur = nxt
+            elif s[0] == "C":
+                pts.extend([map_pt(s[1], s[2]), map_pt(s[3], s[4]),
+                            map_pt(s[5], s[6])])
+                cur = pts[-1]
+        if pts and first is None:
+            first = pts[0]
+        if first is not None and cur is not None and (
+                abs(cur[0]-first[0]) > 1e-9 or
+                abs(cur[1]-first[1]) > 1e-9):
+            # close the loop with a line-to-cubic
+            nxt = first
+            if cur is not None:
+                pts.extend([(cur[0] + (nxt[0]-cur[0])/3.0,
+                             cur[1] + (nxt[1]-cur[1])/3.0),
+                            (cur[0] + 2*(nxt[0]-cur[0])/3.0,
+                             cur[1] + 2*(nxt[1]-cur[1])/3.0)])
+                pts.append(nxt)
+        n_cubics, rem = divmod(len(pts) - 1, 3)
+        if not pts or rem or n_cubics < 1:
+            return None
         arr = []
         for px, py in pts:
-            arr.append(X(px))
-            arr.append(Y(py))
-        return editor.DrawPolyline(arr, 0)
+            arr.append(px); arr.append(py)
+        try:
+            shp = editor.DrawBezier(arr, 3, 0)
+        except Exception:
+            return None
+        # DrawBezier stores the chain as ONE NURBS with Visio's own uniform
+        # knots, which approximates (visible bulges on circles). Rewrite the
+        # NURBSTo formula with the EXACT double-knot vector that encodes the
+        # chained cubics verbatim.
+        try:
+            m = n_cubics
 
-    def paint_compound(subpaths, pfill, pstroke):
+            def knot_of(i):
+                # exact bezier-chain knot vector U = {0^4, 1^3, 2^3, ...,
+                # (m-1)^3, m^4}; Visio lists U[i+1] for ctrl point i
+                if i <= 2:
+                    return 0
+                if i >= 3 * m:
+                    return m
+                return -(-i // 3)  # ceil(i/3)
+
+            # NURBS control coordinates are shape-LOCAL (relative to the
+            # bounding-box origin), never absolute page inches
+            ox = min(p[0] for p in pts)
+            oy = min(p[1] for p in pts)
+            terms = []
+            for i in range(1, len(pts)):
+                px, py = pts[i][0] - ox, pts[i][1] - oy
+                if i == len(pts) - 1:
+                    terms.append(f"{px:.8f},{py:.8f},{m}")
+                else:
+                    terms.append(f"{px:.8f},{py:.8f},{knot_of(i)}")
+            formula = f"NURBS({m}, 3, 0, 0, " + ",".join(terms) + ")"
+            shp.CellsSRC(10, 1, 6).FormulaU = formula  # Geometry1.E1
+        except Exception as e:
+            print(f"nurbs rewrite fail: {e}", file=sys.stderr)
+        return shp
+
+    def poly_shape(pts):
+        arr = []
+        last = None
+        for px, py in pts:
+            cur = (X(px), Y(py))
+            if last is not None and abs(cur[0]-last[0]) < 1e-6 and abs(cur[1]-last[1]) < 1e-6:
+                continue
+            arr.append(cur[0]); arr.append(cur[1]); last = cur
+        try:
+            return editor.DrawPolyline(arr, 0)
+        except Exception:
+            if len(arr) <= 8:
+                raise
+            pts2 = list(zip(arr[0::2], arr[1::2]))[::2]
+            arr = [c for pt in pts2 for c in pt]
+            try:
+                return editor.DrawPolyline(arr, 0)
+            except Exception:
+                pts2 = pts2[::2]
+                arr = [c for pt in pts2 for c in pt]
+                return editor.DrawPolyline(arr, 0)
+
+    def paint_compound(subpaths, pfill, pstroke, segsets=None):
         n = len(subpaths)
 
         def signed_area(pts):
@@ -241,19 +348,24 @@ def draw_cluster_into(editor, cl, cells, offsets):
 
         body_i = max(range(n), key=lambda k: abs(signed_area(subpaths[k])))
         body = subpaths[body_i]
-        shp = poly_shape(body)
+        segs_body = segsets[body_i] if segsets and body_i < len(segsets) else None
+        shp = (segs_body and bezier_shape(segs_body)) or poly_shape(body)
         paint(shp, pfill, pstroke, 1.0, False)
 
         for _, i, colour in plan:
             if i == body_i:
                 continue
-            hs = poly_shape(subpaths[i])
+            segs_i = segsets[i] if segsets and i < len(segsets) else None
+            hs = (segs_i and bezier_shape(segs_i)) or poly_shape(subpaths[i])
+            if hs is None:
+                continue
             hs.Cells("FillForegnd").FormulaU = rgb(colour)
-            if pstroke:
-                hs.Cells("LineColor").FormulaU = rgb(pstroke)
-                hs.Cells("LineWeight").FormulaU = "0.5 pt"
-            else:
-                hs.Cells("LinePattern").FormulaU = "0"
+            # stroke EVERY loop boundary with the icon colour so thin slivers
+            # stay crisp (white hole fills otherwise eat anti-aliased edges)
+            hs.Cells("LineColor").FormulaU = rgb(pfill or pstroke or "#000000")
+            hs.Cells("LineWeight").FormulaU = (
+                "MAX(0.5 pt * Height/0.85 in, 0.35 pt)")
+        return shp
 
     by_id = {c["id"]: c for c in cells}
     for member in cl:
@@ -281,12 +393,32 @@ def draw_cluster_into(editor, cl, cells, offsets):
 
         for p in prims:
             alpha = p.get("alpha", 1.0)
+            def map_segs(sgs):
+                out = []
+                for s in sgs:
+                    if s[0] in ("M", "L"):
+                        mx, my = cx + s[1] * sxx, cy + s[2] * syy
+                        out.append((s[0], mx, my))
+                    else:
+                        a = (cx + s[1] * sxx, cy + s[2] * syy)
+                        b = (cx + s[3] * sxx, cy + s[4] * syy)
+                        e = (cx + s[5] * sxx, cy + s[6] * syy)
+                        out.append(("C", a[0], a[1], b[0], b[1], e[0], e[1]))
+                return out
+
             if p["kind"] == "poly":
-                shp = poly_shape(map_pts(p["subpaths"][0]))
+                segs = p.get("segs", [None])[0]
+                shp = None
+                if segs:
+                    shp = bezier_shape(map_segs(segs))
+                if shp is None:
+                    shp = poly_shape(map_pts(p["subpaths"][0]))
                 paint(shp, p["fill"], p["stroke"], sw, dashed, alpha)
             elif p["kind"] == "compound":
                 paint_compound([map_pts(sp) for sp in p["subpaths"]],
-                               p["fill"], p["stroke"])
+                               p["fill"], p["stroke"],
+                               [map_segs(sg) for sg in p.get("segs", [])
+                                if sg] if p.get("segs") else None)
             elif p["kind"] == "rect":
                 rx, ry = cx + p["x"] * sxx, cy + p["y"] * syy
                 shp = editor.DrawRectangle(X(rx), Y(ry + p["h"] * syy),
@@ -334,7 +466,7 @@ def main(src=SRC, out=OUT):
 
             editor = master.Open()
             try:
-                draw_cluster_into(editor, cl_sorted, cells, offsets)
+                draw_cluster_into(editor, cl_sorted, cells, offsets, app)
             finally:
                 editor.Close()
 
