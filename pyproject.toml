@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drawio-to-visio"
+version = "1.0.0"
+description = "Convert draw.io diagrams into fully editable native Microsoft Visio files and extract reusable stencil sets"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Sorosh Sabzaliyeva" }]
+keywords = ["drawio", "visio", "vsdx", "vssx", "converter", "stencil", "diagram"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+]
+dependencies = [
+    "pywin32; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "coverage>=7",
+    "flake8>=6",
+]
+
+[project.scripts]
+drawio2visio = "drawio_to_visio.cli:main_visio"
+drawio2stencils = "drawio_to_visio.cli:main_stencils"
+
+[project.urls]
+Homepage = "https://github.com/soroshsabz/DrawioToVisio"
+Issues = "https://github.com/soroshsabz/DrawioToVisio/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["drawio_to_visio"]
+
+[tool.coverage.run]
+include = ["src/drawio_to_visio/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if win32com is None",
+    "except ImportError",
+    "def main",
+    "if __name__ == .__main__.:",
+]

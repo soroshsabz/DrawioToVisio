@@ -24,5 +24,5 @@ jobs:
 
       - name: Syntax errors + undefined names (the essentials)
         run: >-
-          flake8 drawio2visio.py drawio2stencils.py verify_sheet.py tests
+          flake8 src tests verify_sheet.py
           --select=E9,F63,F7,F82 --show-source --statistics

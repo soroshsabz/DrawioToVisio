@@ -25,3 +25,6 @@ coverage.json
 htmlcov/
 *.pyc
 pytest_cache/
+dist/
+build/
+tests/_scratch/

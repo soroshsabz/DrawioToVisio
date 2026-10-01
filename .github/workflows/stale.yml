@@ -18,10 +18,24 @@ jobs:
       pull-requests: write
 
     steps:
-    - uses: actions/stale@v5
+    - uses: actions/stale@v9
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
-        stale-issue-message: 'Stale issue message'
-        stale-pr-message: 'Stale pull request message'
-        stale-issue-label: 'no-issue-activity'
-        stale-pr-label: 'no-pr-activity'
+        stale-issue-message: >
+          This issue has been inactive for 60 days. It will be closed in 14
+          days if no further activity occurs. If it is still relevant, add a
+          comment or remove the stale label.
+        stale-pr-message: >
+          This pull request has been inactive for 60 days. It will be closed
+          in 14 days if no further activity occurs. If it is still relevant,
+          add a comment or remove the stale label.
+        close-issue-message: >
+          Closed for inactivity. Feel free to reopen if this is still an
+          issue with a current version.
+        stale-issue-label: 'stale'
+        stale-pr-label: 'stale'
+        exempt-issue-labels: 'pinned,keep,bug'
+        exempt-pr-labels: 'pinned,keep,work-in-progress'
+        days-before-stale: 60
+        days-before-close: 14
+        operations-per-run: 60

@@ -1,0 +1,32 @@
+# Label configuration for actions/labeler (v4 format).
+# Labels are applied to pull requests based on the changed file paths.
+
+python:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**/*.py"
+          - "tests/**/*.py"
+          - "*.py"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+          - ".github/scripts/**"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "docs/**"
+
+examples:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "examples/**"
+
+visio-output:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.vsdx"
+          - "**/*.vssx"

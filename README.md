@@ -79,27 +79,84 @@ pip install pywin32
 
 ## Quick start
 
+Install as a library (Windows + Visio required for conversion):
+
+```bash
+pip install git+https://github.com/soroshsabz/DrawioToVisio.git
+```
+
+Or from a clone:
+
 ```bash
 git clone https://github.com/soroshsabz/DrawioToVisio.git
 cd DrawioToVisio
-pip install pywin32
+pip install .
+```
 
+### Library usage
+
+```python
+from drawio_to_visio import convert, extract_stencils
+
+# simple conversion (Visio required, Windows only)
+convert("input.drawio", "output.vsdx")
+
+# two-pass pipeline: extract icons, then convert using the stencil set
+extract_stencils("input.drawio", "icons.vssx")
+convert("input.drawio", "output.vsdx", stencil_vssx="icons.vssx")
+```
+
+Pure parsing helpers work on any OS (no Visio needed):
+
+```python
+from drawio_to_visio.core import load_cells, decode_stencil, parse_label
+
+cells = load_cells("input.drawio")       # every mxCell / UserObject
+prims, size = stencil_primitives(sel, fill, stroke)
+```
+
+### CLI usage
+
+Two console scripts are installed with the package:
+
+```bash
 # Convert a diagram
-python drawio2visio.py examples/sample-basic.drawio output.vsdx
+drawio2visio input.drawio output.vsdx
 
 # Extract every icon into a stencil set
-python drawio2stencils.py examples/sample-basic.drawio icons.vssx
+drawio2stencils input.drawio icons.vssx
 
 # Two-pass pipeline: stencils + master-instance diagram
-python drawio2stencils.py examples/sample-functional-view.drawio icons.vssx
-python drawio2visio.py examples/sample-functional-view.drawio output.vsdx icons.vssx
+drawio2visio input.drawio output.vsdx icons.vssx
 
 # Preview a stencil set as an annotated contact sheet
 python verify_sheet.py icons.vssx icons-sheet.png
 ```
 
+The legacy scripts still work from a clone:
+
+```bash
+python drawio2visio.py input.drawio output.vsdx [icons.vssx]
+python drawio2stencils.py input.drawio icons.vssx
+```
+
 Open the `.vsdx` in Visio — everything is editable. Open the `.vssx` from
 Visio's *More Shapes* menu to drag-drop the extracted icons anywhere.
+
+## Project layout
+
+```
+src/drawio_to_visio/     the installable package
+├── core.py              conversion engine (parse → primitives → Visio COM)
+├── stencils.py          icon clustering + stencil master generation
+├── cli.py               argparse entry points
+└── __init__.py          public API (convert, extract_stencils, ...)
+tests/                   platform-independent unit tests
+examples/                sample diagrams + converted outputs
+```
+
+The root-level `drawio2visio.py` / `drawio2stencils.py` files are thin CLI
+wrappers around the package and remain runnable from a source checkout.
 
 ## Scripts
 
@@ -114,9 +171,7 @@ python drawio2visio.py input.drawio output.vsdx [icons.vssx]
 python drawio2stencils.py input.drawio icons.vssx
 ```
 
-Both scripts accept absolute or relative paths. `drawio2stencils.py` imports
-the parsing/painting engine from `drawio2visio.py`, so keep the two files in
-the same folder.
+Both scripts accept absolute or relative paths.
 
 ## How it works
 
@@ -189,16 +244,44 @@ results without running anything.
 
 ## Testing
 
+The test suite is split into two layers:
+
+| Layer | Location | Needs Visio? | What it checks |
+|---|---|---|---|
+| Unit | `tests/unit/` | no | draw.io XML parsing, stencil decoding, primitive building, label parsing, public API |
+| System (end-to-end) | `tests/system/` | yes | real `.drawio` → `.vsdx` / `.vssx` conversions, package validity, master instances, text preservation |
+
+Run everything:
+
 ```bash
-pip install coverage
+pip install -e .[dev]
+python -m unittest discover -s tests -t . -v
+```
+
+With coverage:
+
+```bash
 coverage run -m unittest discover -s tests
 coverage report -m
 ```
 
-The parsing engine is fully covered by `tests/test_engine.py` (26 tests);
-the Visio COM painting layer requires a desktop Visio install and is out of
-scope for CI. The live coverage badge in the README is regenerated on every
-push to `main` by the CI pipeline.
+The system tests skip automatically when Microsoft Visio is not installed,
+so the unit layer keeps CI green on plain runners. The live coverage badge
+in the README is regenerated on every push to `main` by the CI pipeline
+(unit layer scope).
+
+## Packaging
+
+The project is an installable Python package (`drawio-to-visio` on the src
+layout) with console-script entry points:
+
+```bash
+pip install .            # library + drawio2visio / drawio2stencils commands
+python -m build          # sdist + wheel
+```
+
+CI builds and validates the package on every PR, and publishes to PyPI
+automatically when a `v*` tag is pushed (trusted publishing).
 
 ## Contributing
 

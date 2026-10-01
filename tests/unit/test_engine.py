@@ -1,30 +1,24 @@
-"""Platform-independent tests for the DrawioToVisio parsing engine.
+"""Unit tests for the DrawioToVisio parsing engine.
 
 These tests exercise the pure-Python parts (draw.io XML parsing, stencil
 decoding, primitive building, label parsing) that do not require Visio or
-Windows.  The COM painting layer is exercised only on a machine with
-Microsoft Visio installed.
+Windows, plus the public library API.  End-to-end conversions that need a
+real Visio install live in tests/system/.
 """
 
-import importlib.util
 import os
 import sys
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO = os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))
+SRC = os.path.join(REPO, "src")
+for _p in (SRC, REPO):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-
-def _load(name, filename):
-    spec = importlib.util.spec_from_file_location(
-        name, os.path.join(REPO, filename))
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-d2v = _load("d2v_test", "drawio2visio.py")
-d2s = _load("d2s_test", "drawio2stencils.py")
+import drawio_to_visio.core as d2v  # noqa: E402
+import drawio_to_visio.stencils as d2s  # noqa: E402
 
 SAMPLE = os.path.join(REPO, "examples", "sample-functional-view.drawio")
 BASIC = os.path.join(REPO, "examples", "sample-basic.drawio")
@@ -154,9 +148,6 @@ class TestStencilCollect(unittest.TestCase):
         self.assertGreater(len(uniq), 20)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class TestGeometryHelpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -264,3 +255,37 @@ class TestIconNaming(unittest.TestCase):
                 named += 1
         # most clusters should resolve a human-readable name
         self.assertGreater(named, len(uniq) * 0.5)
+
+
+class TestLibraryAPI(unittest.TestCase):
+    """The installable package must expose a clean public API."""
+
+    def test_public_api(self):
+        import drawio_to_visio
+        for name in ("convert", "extract_stencils", "load_cells",
+                     "decode_stencil", "stencil_primitives", "parse_label",
+                     "parse_style", "__version__"):
+            self.assertTrue(hasattr(drawio_to_visio, name), name)
+
+    def test_version(self):
+        import drawio_to_visio
+        parts = drawio_to_visio.__version__.split(".")
+        self.assertEqual(len(parts), 3)
+
+    def test_cli_entry_points_exist(self):
+        from drawio_to_visio import cli
+        self.assertTrue(callable(cli.main_visio))
+        self.assertTrue(callable(cli.main_stencils))
+
+    def test_convert_signature(self):
+        import inspect
+        import drawio_to_visio
+        sig = inspect.signature(drawio_to_visio.convert)
+        self.assertEqual(list(sig.parameters), ["src_path", "out_path",
+                                                "stencil_vssx"])
+
+    def test_extract_signature(self):
+        import inspect
+        import drawio_to_visio
+        sig = inspect.signature(drawio_to_visio.extract_stencils)
+        self.assertEqual(list(sig.parameters), ["src", "out"])

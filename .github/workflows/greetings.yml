@@ -12,5 +12,12 @@ jobs:
     - uses: actions/first-interaction@v1
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
-        issue-message: "Message that will be displayed on users' first issue"
-        pr-message: "Message that will be displayed on users' first pull request"
+        issue-message: |
+          👋 Thanks for opening your first issue here!
+          Please include your draw.io file version, Python version and a
+          minimal sample diagram if you can - it makes reproducing much faster.
+        pr-message: |
+          🎉 Thanks for your first pull request!
+          Please make sure `python -m unittest discover -s tests` passes and
+          that new code follows the existing style. A maintainer will review
+          it shortly.
