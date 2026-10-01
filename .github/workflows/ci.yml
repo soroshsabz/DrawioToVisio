@@ -7,9 +7,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   test:
     name: Python ${{ matrix.python-version }} (Windows)
@@ -40,6 +37,12 @@ jobs:
           coverage xml -o coverage.xml
           coverage json -o coverage.json
 
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
       - name: CLI smoke test (console scripts)
         run: |
           drawio2visio --help
@@ -51,27 +54,6 @@ jobs:
         with:
           name: coverage-${{ matrix.python-version }}
           path: coverage.xml
-
-      - name: Generate coverage badge (only on 3.12)
-        if: matrix.python-version == '3.12'
-        run: python .github/scripts/make_badge.py coverage.json docs/coverage.svg
-
-      - name: Commit live coverage badge
-        if: matrix.python-version == '3.12' && github.event_name == 'push'
-        shell: pwsh
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          New-Item -ItemType Directory -Force -Path docs | Out-Null
-          git add docs/coverage.svg
-          git diff --cached --quiet
-          if ($LASTEXITCODE -ne 0) {
-            git commit -m "chore: update coverage badge [skip ci]"
-            git pull --rebase
-            git push
-          } else {
-            Write-Host "coverage badge unchanged"
-          }
 
 
       - name: Smoke test - parse sample and build primitives

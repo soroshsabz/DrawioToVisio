@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#requirements)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![Visio](https://img.shields.io/badge/Microsoft%20Visio-2016%2B-green)](#requirements)
-[![Coverage](https://raw.githubusercontent.com/soroshsabz/DrawioToVisio/main/docs/coverage.svg)](docs/coverage.svg)
+[![codecov](https://codecov.io/gh/soroshsabz/DrawioToVisio/graph/badge.svg)](https://codecov.io/gh/soroshsabz/DrawioToVisio)
 [![PyPI version](https://img.shields.io/pypi/v/drawio-to-visio.svg)](https://pypi.org/project/drawio-to-visio/)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/drawio-to-visio.svg)](https://pypi.org/project/drawio-to-visio/)
 
@@ -274,9 +274,9 @@ coverage report -m
 ```
 
 The system tests skip automatically when Microsoft Visio is not installed,
-so the unit layer keeps CI green on plain runners. The live coverage badge
-in the README is regenerated on every push to `main` by the CI pipeline
-(unit layer scope).
+so the unit layer keeps CI green on plain runners. CI uploads coverage to
+[Codecov](https://codecov.io/gh/soroshsabz/DrawioToVisio) on every run -
+the README badge always reflects the latest coverage on `main`.
 
 ## Packaging
 
