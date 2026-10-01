@@ -31,6 +31,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "coverage>=7",
+    "tomli; python_version < '3.11'",
     "flake8>=6",
 ]
 
@@ -45,15 +46,3 @@ Issues = "https://github.com/soroshsabz/DrawioToVisio/issues"
 [tool.setuptools]
 package-dir = {"" = "src"}
 packages = ["drawio_to_visio"]
-
-[tool.coverage.run]
-include = ["src/drawio_to_visio/*"]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "if win32com is None",
-    "except ImportError",
-    "def main",
-    "if __name__ == .__main__.:",
-]
