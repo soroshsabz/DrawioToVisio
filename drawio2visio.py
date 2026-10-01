@@ -900,7 +900,7 @@ def main(src_path=SRC, out_path=OUT, stencil_vssx=None):
             if ci is not None:
                 # member cell graphics are replaced by its master instance,
                 # but its TEXT label must still be rendered (icon labels like
-                # "Palantir / on-premises / agent" live on cluster cells)
+                # e.g. "App / on-premises / agent" labels live on cluster cells)
                 lbl = c.get("label")
                 if lbl:
                     mstyle = parse_style(c["style"])

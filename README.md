@@ -10,9 +10,10 @@ vector shapes, zero rasters — and extract every icon into a reusable Visio
 stencil set (.vssx).**
 
 Everything in the output is real Visio geometry: rounded rectangles, ovals,
-polylines, dashed strokes, text, arrowheads. Every icon line-art glyph keeps
-its hollow interiors (nonzero-winding holes are faithfully reproduced), and
-you can select, recolour, and edit any element afterwards in Visio.
+polylines, smooth NURBS curves, dashed strokes, text, arrowheads. Every icon
+line-art glyph keeps its hollow interiors (nonzero-winding holes are
+faithfully reproduced), and you can select, recolour, and edit any element
+afterwards in Visio.
 
 ---
 
@@ -25,7 +26,7 @@ embedded stencil payloads, and redraws every shape through the Visio COM API
 with a faithful reproduction of draw.io's nonzero-winding fill rule.
 
 <p align="center">
-  <img src="docs/screenshot-palantir.png" width="820" alt="Converted Palantir Foundry AIP diagram">
+  <img src="docs/screenshot-functional.png" width="820" alt="Converted functional-view diagram">
 </p>
 
 *1,359 native Visio shapes converted from a 730 KB draw.io file — panels,
@@ -35,18 +36,29 @@ labels, connector arrows, and all 100+ line-art icons intact.*
 
 - **Fully editable output** — every shape is a native Visio shape; recolour,
   move, restyle anything after conversion
+- **Two-pass stencil pipeline** — first extract every icon into a named,
+  de-duplicated `.vssx` stencil set, then build the final diagram by
+  *dropping* those masters: each icon in the output is a single editable
+  master instance instead of hundreds of loose polylines
 - **True-vector icons** — embedded draw.io stencils are decoded
-  (base64 + raw-deflate) and redrawn as polylines, never embedded as pictures
+  (base64 + raw-deflate) and redrawn as real Visio geometry, never embedded
+  as pictures
+- **Real curve geometry** — closed loops made of cubic-bezier segments are
+  emitted as NURBS curve rows, so circles and ellipses stay smooth at any
+  zoom; straight segments stay straight lines
 - **Nonzero-winding holes** — draw.io's hollow line-art (rings, gauge dials,
   document cut-outs) is reproduced exactly, including nested cut-outs that
-  show glyphs *through* the hole (pie chart on a document, molecule over
-  binoculars)
+  show glyphs *through* the hole; every hole boundary is stroked with the
+  icon colour so thin slivers stay crisp at any size
 - **Correct z-ordering** — containers, backdrops, and overlays are ordered by
   centre-containment depth, so titles never sink under their panels
-- **Stencil extraction** — group every icon into named, de-duplicated
-  `.vssx` masters you can drag-drop in any Visio document
-- **Text fidelity** — font size / colour / bold / alignment parsed from the
-  draw.io HTML labels; multi-line and RTL text supported
+- **Stencil extraction** — the `.vssx` masters can be dragged-dropped into
+  any Visio document
+- **Complete text preservation** — every label is rendered, including labels
+  attached to icon-cluster cells (icon captions like multi-line names sit on
+  stencil cells and are no longer dropped); font size / colour / bold /
+  alignment parsed from the draw.io HTML labels; multi-line and RTL text
+  supported
 - **Generic** — works with plain `mxCell value=` files as well as
   `UserObject`-wrapped exports; handles containers, dashed strokes, ellipses,
   rounded rects, and arrow edges
@@ -77,6 +89,10 @@ python drawio2visio.py examples/sample-basic.drawio output.vsdx
 # Extract every icon into a stencil set
 python drawio2stencils.py examples/sample-basic.drawio icons.vssx
 
+# Two-pass pipeline: stencils + master-instance diagram
+python drawio2stencils.py examples/sample-functional-view.drawio icons.vssx
+python drawio2visio.py examples/sample-functional-view.drawio output.vsdx icons.vssx
+
 # Preview a stencil set as an annotated contact sheet
 python verify_sheet.py icons.vssx icons-sheet.png
 ```
@@ -88,12 +104,12 @@ Visio's *More Shapes* menu to drag-drop the extracted icons anywhere.
 
 | Script | Purpose |
 |---|---|
-| `drawio2visio.py` | Convert a `.drawio` diagram to an editable `.vsdx` |
+| `drawio2visio.py` | Convert a `.drawio` diagram to an editable `.vsdx`. Pass an optional `.vssx` path to switch on the stencil pipeline |
 | `drawio2stencils.py` | Extract all icons into a `.vssx` stencil set |
 | `verify_sheet.py` | Render a `.vssx` as a labeled contact-sheet PNG for review |
 
 ```text
-python drawio2visio.py input.drawio output.vsdx
+python drawio2visio.py input.drawio output.vsdx [icons.vssx]
 python drawio2stencils.py input.drawio icons.vssx
 ```
 
@@ -113,12 +129,17 @@ the same folder.
    ├─ build primitives ─── poly │ compound (multi-loop) │ rect │ oval
    │
    └─ paint via Visio COM
-        ├─ DrawPolyline / DrawRectangle / DrawOval
+        ├─ stencil pipeline: dedupe icon clusters → named .vssx masters →
+        │   page.Drop() master instances (one editable shape per icon)
+        ├─ DrawPolyline / DrawBezier / DrawRectangle / DrawOval
         ├─ nonzero-winding fill: per-loop BAND winding sampled at the
-        │   longest-edge midpoint nudged inward; winding = 0 → background
-        │   fill (hole), else icon colour — painted outer-first
+        │   longest-edge midpoint nudged inward; winding = 0 → hole,
+        │   painted as a background-coloured overlay with the icon colour
+        │   stroked along every loop boundary (keeps thin slivers crisp)
+        ├─ smooth curves: closed bezier chains → NURBSTo rows
         ├─ z-order: centre-containment depth (containers first)
-        └─ text, dashes, arrows, rounding, transparency
+        └─ text (all labels preserved), dashes, arrows, rounding,
+            transparency
 ```
 
 ### The two hard problems
@@ -127,14 +148,15 @@ the same folder.
 `Selection.Subtract` refuses to punch holes between polyline shapes. The fix:
 draw each loop as its own shape and emulate draw.io's nonzero-winding rule —
 sample the winding number just inside each loop's band; `winding == 0` means
-the loop interior is a hole and gets painted with the backdrop colour.
+the loop interior is a hole. Hole overlays are stroked with the icon colour
+so the anti-aliasing of the background fill never eats thin dark details.
 
-**2. Nested cut-outs.** A document icon with a pie chart *inside* it needs the
-glyph drawn **after** the white hole that cuts it. Draw order is therefore a
-containment sort: any cell whose bounding box contains another cell's centre
-is a container and paints first.
-
-Both rules and several more gotchas are documented in detail in the source.
+**2. Text on icon cells.** draw.io commonly attaches captions (multi-line
+icon names) to the same cells that carry the stencil artwork. When the
+stencil pipeline replaces a cluster of cells with a single master instance,
+those labels would vanish. The converter therefore re-renders every member
+cell's label on top of the dropped master, at its original position and
+formatting.
 
 ## Examples
 
@@ -142,9 +164,8 @@ The [`examples/`](examples/) folder contains:
 
 - `sample-basic.drawio` — containers, dashed zones, ellipse, embedded
   stencil, arrow edge
-- `sample-palantir-aip.drawio` — a real-world 730 KB Palantir Foundry AIP
-  functional-view diagram (758 vertex cells, 121 labels, 487 unique
-  stencils)
+- `sample-functional-view.drawio` — a real-world 730 KB functional-view
+  diagram (758 vertex cells, 121 labels, 487 unique stencils)
 
 Converted outputs (`.vsdx` / `.vssx`) are included so you can inspect the
 results without running anything.
@@ -153,14 +174,14 @@ results without running anything.
   <img src="docs/screenshot-stencils.png" width="620" alt="74 extracted stencil masters">
 </p>
 
-*74 unique icon masters extracted from the Palantir sample into one stencil set.*
+*74 unique icon masters extracted from the sample into one stencil set.*
 
 ## Known limitations
 
 - Edge routing uses source/target attachment points plus explicit waypoints;
   orthogonal obstacle-avoidance routing from draw.io is approximated
-- Gradient fills, patterns, and shadows are out of scope (the Palantir-style
-  flat design language converts 1:1)
+- Gradient fills, patterns, and shadows are out of scope (the flat design
+  language of the sample diagrams converts 1:1)
 - Fonts fall back to Visio defaults unless installed on the machine
 - Very large files (>2,000 cells) take a few minutes — Visio COM calls
   dominate the runtime
