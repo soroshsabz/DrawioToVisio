@@ -19,3 +19,9 @@ Thumbs.db
 
 # Visio lock files
 ~$*.vsdx
+.coverage
+coverage.xml
+coverage.json
+htmlcov/
+*.pyc
+pytest_cache/

@@ -21,7 +21,10 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 
-import win32com.client
+try:
+    import win32com.client  # Windows + Visio only; parsing works without it
+except ImportError:  # pragma: no cover - CI on non-Windows runners
+    win32com = None
 
 SRC = r"D:\Source\Repos\Sah\visio\drawio_convert\src.drawio"
 OUT = r"D:\Source\Repos\Sah\visio\drawio_convert\direct.vsdx"

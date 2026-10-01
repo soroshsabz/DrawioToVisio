@@ -4,6 +4,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#requirements)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![Visio](https://img.shields.io/badge/Microsoft%20Visio-2016%2B-green)](#requirements)
+[![Coverage](https://raw.githubusercontent.com/soroshsabz/DrawioToVisio/main/docs/coverage.svg)](docs/coverage.svg)
 
 **Convert draw.io diagrams into fully editable, native Visio files — true
 vector shapes, zero rasters — and extract every icon into a reusable Visio
@@ -185,6 +186,19 @@ results without running anything.
 - Fonts fall back to Visio defaults unless installed on the machine
 - Very large files (>2,000 cells) take a few minutes — Visio COM calls
   dominate the runtime
+
+## Testing
+
+```bash
+pip install coverage
+coverage run -m unittest discover -s tests
+coverage report -m
+```
+
+The parsing engine is fully covered by `tests/test_engine.py` (26 tests);
+the Visio COM painting layer requires a desktop Visio install and is out of
+scope for CI. The live coverage badge in the README is regenerated on every
+push to `main` by the CI pipeline.
 
 ## Contributing
 
