@@ -5,6 +5,8 @@
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![Visio](https://img.shields.io/badge/Microsoft%20Visio-2016%2B-green)](#requirements)
 [![Coverage](https://raw.githubusercontent.com/soroshsabz/DrawioToVisio/main/docs/coverage.svg)](docs/coverage.svg)
+[![PyPI version](https://img.shields.io/pypi/v/drawio-to-visio.svg)](https://pypi.org/project/drawio-to-visio/)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/drawio-to-visio.svg)](https://pypi.org/project/drawio-to-visio/)
 
 **Convert draw.io diagrams into fully editable, native Visio files — true
 vector shapes, zero rasters — and extract every icon into a reusable Visio
@@ -79,7 +81,13 @@ pip install pywin32
 
 ## Quick start
 
-Install as a library (Windows + Visio required for conversion):
+Install from PyPI (Windows + Visio required for conversion):
+
+```bash
+pip install drawio-to-visio
+```
+
+Or directly from GitHub:
 
 ```bash
 pip install git+https://github.com/soroshsabz/DrawioToVisio.git

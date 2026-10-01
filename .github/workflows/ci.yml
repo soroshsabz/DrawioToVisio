@@ -58,18 +58,20 @@ jobs:
 
       - name: Commit live coverage badge
         if: matrix.python-version == '3.12' && github.event_name == 'push'
-        shell: bash
+        shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          New-Item -ItemType Directory -Force -Path docs | Out-Null
           git add docs/coverage.svg
-          if git diff --cached --quiet; then
-            echo "coverage badge unchanged"
-          else
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
             git commit -m "chore: update coverage badge [skip ci]"
             git pull --rebase
             git push
-          fi
+          } else {
+            Write-Host "coverage badge unchanged"
+          }
 
 
       - name: Smoke test - parse sample and build primitives
