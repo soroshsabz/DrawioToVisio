@@ -57,6 +57,14 @@ labels, connector arrows, and all 100+ line-art icons intact.*
   centre-containment depth, so titles never sink under their panels
 - **Stencil extraction** — the `.vssx` masters can be dragged-dropped into
   any Visio document
+- **Connector detection & conversion** — hand-drawn arrow glyphs are
+  detected structurally from their decoded stencil XML (a true arrow always
+  carries a filled arrowhead loop; casing strokes inside icon clusters are
+  protected) and re-drawn as editable Visio polylines that follow the
+  original route corner-for-corner, arrowhead included. Real
+  `<mxCell edge="1">` connectors in the source file are converted to glued
+  Visio connectors with source/target attachment. Opt out of arrow
+  conversion with `--no-real-connectors` to keep every glyph as line-art
 - **Complete text preservation** — every label is rendered, including labels
   attached to icon-cluster cells (icon captions like multi-line names sit on
   stencil cells and are no longer dropped); font size / colour / bold /
@@ -112,6 +120,11 @@ convert("input.drawio", "output.vsdx")
 # two-pass pipeline: extract icons, then convert using the stencil set
 extract_stencils("input.drawio", "icons.vssx")
 convert("input.drawio", "output.vsdx", stencil_vssx="icons.vssx")
+
+# detected arrow glyphs become editable Visio connector polylines by
+# default; pass real_connectors=False to keep them as line-art
+extract_stencils("input.drawio", "icons.vssx")
+convert("input.drawio", "output.vsdx", stencil_vssx="icons.vssx")
 ```
 
 Pure parsing helpers work on any OS (no Visio needed):
@@ -134,8 +147,15 @@ drawio2visio input.drawio output.vsdx
 # Extract every icon into a stencil set
 drawio2stencils input.drawio icons.vssx
 
-# Two-pass pipeline: stencils + master-instance diagram
+# Two-pass pipeline: stencils + master-instance diagram.
+# Detected arrow glyphs are converted to editable Visio connector
+# polylines by default (see "Arrows and connectors" below).
+drawio2stencils input.drawio icons.vssx
 drawio2visio input.drawio output.vsdx icons.vssx
+
+# Keep the arrow glyphs as line-art instead (old behaviour)
+drawio2stencils input.drawio icons.vssx --no-real-connectors
+drawio2visio input.drawio output.vsdx icons.vssx --no-real-connectors
 
 # Preview a stencil set as an annotated contact sheet
 python verify_sheet.py icons.vssx icons-sheet.png
@@ -221,6 +241,34 @@ stencil pipeline replaces a cluster of cells with a single master instance,
 those labels would vanish. The converter therefore re-renders every member
 cell's label on top of the dropped master, at its original position and
 formatting.
+
+### Arrows and connectors
+
+How the converter decides what is an arrow — and what it does with it:
+
+| Source | Detection | Output |
+|---|---|---|
+| `<mxCell edge="1">` (a real draw.io connector) | always an edge — no heuristics | glued Visio connector: source/target attachment points, waypoints, arrowhead style |
+| hand-drawn arrow **stencil** (this is how Visio-exported `.drawio` files represent arrows — they contain *no* `edge` elements at all) | structural analysis of the decoded stencil path: a true arrow always contains exactly one **filled arrowhead loop**; slim casing strokes without one (icon chevrons, borders) are protected, and strokes inside an icon cluster are never stolen | an editable polyline that reproduces the original route corner-for-corner, with the arrowhead and the arrow's own colour |
+
+Detection runs on the decoded path XML (`<move>/<line>/<curve>` segments) —
+never on pixels. The chain walker follows the arrow's segments through
+junctions (preferring perpendicular turns over collinear casing
+continuations, extending in both directions), deduplicates the
+casing/line pairs the exporter produces for a single arrow, and extends
+the last point into the arrowhead. The result is drawn as a Visio
+polyline, so the converted arrow matches the original drawing
+point-for-point and stays selectable and editable.
+
+> **Why not glued dynamic connectors?** The Visio COM API does not allow
+> custom multi-point geometry on dynamic connectors — their route is
+> recomputed automatically, so a glued connector cannot follow the
+> original drawing's exact path. Exact-path polylines are the faithful
+> representation; if you re-author the arrows as real draw.io edges,
+> they convert to glued dynamic connectors instead.
+
+Opt out entirely with `--no-real-connectors` to keep every arrow glyph
+as plain line-art.
 
 ## Examples
 

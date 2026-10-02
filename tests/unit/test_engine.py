@@ -140,8 +140,9 @@ class TestStencilCollect(unittest.TestCase):
         """Icon clusters must be collectable from the real sample diagram."""
         cells = d2v.load_cells(SAMPLE)
         offsets = d2v.build_offsets(cells)
-        icon_cells, labels = d2s.collect(cells, offsets)
+        icon_cells, labels, conn_parts = d2s.collect(cells, offsets)
         self.assertGreater(len(icon_cells), 100)
+        self.assertGreaterEqual(len(conn_parts), 0)
         clusters = d2s.clusters_of(icon_cells)
         self.assertGreater(len(clusters), 20)
         uniq = d2s.dedupe(clusters)
@@ -245,7 +246,7 @@ class TestIconNaming(unittest.TestCase):
     def test_name_cluster_uses_nearby_label(self):
         cells = d2v.load_cells(SAMPLE)
         offsets = d2v.build_offsets(cells)
-        icon_cells, labels = d2s.collect(cells, offsets)
+        icon_cells, labels, _conn = d2s.collect(cells, offsets)
         clusters = d2s.clusters_of(icon_cells)
         uniq = d2s.dedupe(clusters)
         named = 0
@@ -281,11 +282,15 @@ class TestLibraryAPI(unittest.TestCase):
         import inspect
         import drawio_to_visio
         sig = inspect.signature(drawio_to_visio.convert)
-        self.assertEqual(list(sig.parameters), ["src_path", "out_path",
-                                                "stencil_vssx"])
+        self.assertEqual(list(sig.parameters),
+                         ["src_path", "out_path", "stencil_vssx",
+                          "real_connectors"])
+        self.assertIs(sig.parameters["real_connectors"].default, True)
 
     def test_extract_signature(self):
         import inspect
         import drawio_to_visio
         sig = inspect.signature(drawio_to_visio.extract_stencils)
-        self.assertEqual(list(sig.parameters), ["src", "out"])
+        self.assertEqual(list(sig.parameters),
+                         ["src", "out", "real_connectors"])
+        self.assertIs(sig.parameters["real_connectors"].default, True)

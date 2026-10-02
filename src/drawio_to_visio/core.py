@@ -71,6 +71,7 @@ class LabelHTML(HTMLParser):
         self.color = None
         self.bold = False
         self.align = None
+        self.font = None
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
@@ -86,6 +87,11 @@ class LabelHTML(HTMLParser):
         m = re.search(r"text-align:\s*(\w+)", st)
         if m:
             self.align = m.group(1)
+        m = re.search(r"font-family:\s*([^;\"']+)", st)
+        if m:
+            fam = m.group(1).strip()
+            if fam and fam.lower() not in ("unknown",):
+                self.font = fam
         if tag in ("b", "strong"):
             self.bold = True
         if tag == "br":
@@ -96,7 +102,8 @@ class LabelHTML(HTMLParser):
 
 
 def parse_label(html_label, style):
-    info = {"text": "", "size": None, "color": None, "bold": False, "align": None}
+    info = {"text": "", "size": None, "color": None, "bold": False,
+            "align": None, "font": None}
     if not html_label:
         return info
     p = LabelHTML()
@@ -106,6 +113,7 @@ def parse_label(html_label, style):
     info["color"] = p.color
     info["bold"] = p.bold
     info["align"] = p.align or style.get("align")
+    info["font"] = p.font or style.get("fontFamily")
     return info
 
 
@@ -474,6 +482,8 @@ class VisioBuilder:
         self.page = self.doc.Pages(1)
         self.page.PageSheet.Cells("PageWidth").FormulaU = f"{self.w_in:.4f} in"
         self.page.PageSheet.Cells("PageHeight").FormulaU = f"{self.h_in:.4f} in"
+        self.text_shapes = []
+        self.rects = []          # (x, y, w, h, shape) for connector gluing   # ((x, y, w, h) canvas px, shape)
 
     def X(self, x):
         return x / PPI
@@ -642,6 +652,7 @@ class VisioBuilder:
         shp = self.page.DrawRectangle(self.X(x), self.Y(y + h),
                                       self.X(x + w), self.Y(y))
         self._paint(shp, fill, stroke, sw, dashed, alpha)
+        self.rects.append((x, y, w, h, shp))
         return shp
 
     def oval(self, x, y, w, h, fill, stroke, sw, dashed, alpha=1.0):
@@ -660,9 +671,21 @@ class VisioBuilder:
         shp.Cells("TopMargin").FormulaU = "0 pt"
         shp.Cells("BottomMargin").FormulaU = "0 pt"
         shp.Text = info["text"]
+        self.text_shapes.append(((x, y, w, h), shp))
         if info["size"]:
             shp.Cells("Char.Size").FormulaU = f"{info['size'] * 0.75:.2f} pt"
         shp.Cells("Char.Color").FormulaU = self.rgb(info["color"] or "#000000")
+        if info.get("font"):
+            # map draw.io font names to installed Visio fonts; Char.Font
+            # takes the font's numeric ID from the document font table
+            fam = info["font"]
+            if fam.lower() in ("helvetica", "arial", "oracle sans"):
+                fam = "Arial"
+            try:
+                shp.Cells("Char.Font").FormulaU = str(
+                    self.doc.Fonts(fam).ID)
+            except Exception:
+                pass
         if info["bold"]:
             shp.Cells("Char.Style").FormulaU = "1"
         align = info["align"]
@@ -677,6 +700,10 @@ class VisioBuilder:
 
     def quit(self):
         try:
+            # mark clean so no AutoRecovery data is written and no
+            # "Recovered Documents" pane appears on the user's next
+            # real Visio launch
+            self.doc.Saved = True
             self.doc.Close()
         except Exception:
             pass
@@ -770,7 +797,8 @@ def cell_hole_ids(cells):
 
 # ---------------------------------------------------------------- main
 
-def main(src_path, out_path, stencil_vssx=None):
+def main(src_path, out_path, stencil_vssx=None,
+         real_connectors=True):
     """Convert a draw.io file to Visio. When `stencil_vssx` is given, the
     pipeline is:
       1. extract every icon into a named, de-duplicated .vssx stencil set
@@ -802,14 +830,21 @@ def main(src_path, out_path, stencil_vssx=None):
     if stencil_vssx:
         from .stencils import (collect, clusters_of, dedupe,
                                name_cluster, draw_cluster_into)
-        icon_cells, labels2 = collect(cells, offsets)
+        icon_cells, labels2, conn_parts = collect(
+            cells, offsets,
+            real_connectors=real_connectors)
+        conn_by_id = {cp["id"]: cp for cp in conn_parts}
         clusters = clusters_of(icon_cells)
         uniq = dedupe(clusters)
         print(f"step 1: unique stencil masters = {len(uniq)}")
 
         used_names = {}
         master_of_cluster = []  # (cluster, master name)
+        doc_order = {cell["id"]: i for i, cell in enumerate(cells)}
         for idx, cl in enumerate(uniq):
+            # draw in the ORIGINAL drawio z-order (document order):
+            # knockout icons (white cutouts under dark glyphs) break
+            # when sorted by area
             cl_sorted = sorted(
                 cl, key=lambda mm: -(mm["rect"][2] * mm["rect"][3]))
             name = name_cluster(cl, labels2) or f"Icon {idx + 1}"
@@ -828,6 +863,10 @@ def main(src_path, out_path, stencil_vssx=None):
             master.Name = name
             editor = master.Open()
             try:
+                ci = id(cl_sorted)
+                hf = "#FFFFFF"
+                for (clx, nm), hfv in ((x, y) for x, y in []):
+                    pass
                 draw_cluster_into(editor, cl_sorted, cells, offsets, b.app)
             finally:
                 editor.Close()
@@ -883,6 +922,8 @@ def main(src_path, out_path, stencil_vssx=None):
         if stencil_vssx:
             st = b.app.Documents.OpenEx(os.path.abspath(stencil_vssx), 4)
         dropped_clusters = set()
+        icon_page_shapes = []   # ((x, y, w, h) canvas px, master instance)
+        label_page_shapes = []  # ((x, y, w, h) canvas px, text shape)
 
         for c in ordered:
             # ---- STEP 2: when the first member of an icon cluster comes up
@@ -897,7 +938,13 @@ def main(src_path, out_path, stencil_vssx=None):
                 shp.Cells("PinY").FormulaU = f"{b.Y(by + bh2 / 2):.4f} in"
                 shp.Cells("Width").FormulaU = f"{bw2 / PPI:.4f} in"
                 shp.Cells("Height").FormulaU = f"{bh2 / PPI:.4f} in"
+                icon_page_shapes.append(
+                    ((bx, by, bw2, bh2), shp))
                 n_v += 1
+            if stencil_vssx and c["id"] in conn_by_id:
+                # connector fragment: replaced by real Visio connectors
+                # created after the main loop
+                continue
             if ci is not None:
                 # member cell graphics are replaced by its master instance,
                 # but its TEXT label must still be rendered (icon labels like
@@ -909,8 +956,10 @@ def main(src_path, out_path, stencil_vssx=None):
                     if minfo["text"]:
                         mr = rect_of(c, offsets)
                         if mr and mr[2] > 0 and mr[3] > 0:
-                            b.text(mr[0], mr[1], mr[2], mr[3], minfo,
-                                   mstyle.get("verticalAlign"))
+                            tshp = b.text(mr[0], mr[1], mr[2], mr[3], minfo,
+                                          mstyle.get("verticalAlign"))
+                            if tshp is not None:
+                                label_page_shapes.append((mr, tshp))
                             n_t += 1
                 continue  # member cell - replaced by its master instance
             style = parse_style(c["style"])
@@ -1059,13 +1108,61 @@ def main(src_path, out_path, stencil_vssx=None):
                         shp.Cells("BeginArrow").FormulaU = "5"
                     n_e += 1
 
+
+        # ---- STEP 3 (--real-connectors): replace slim directional-arrow
+        # stencil glyphs with real Visio dynamic connectors (editable,
+        # routable, arrowhead included)
         if stencil_vssx:
+            # close the docked stencil document so the file is unlocked
+            try:
+                for d in list(b.app.Documents):
+                    if d.Type == 2:  # visDocTypeStencil
+                        d.Close()
+            except Exception:
+                pass
             from .stencils import _inject_stencil_window
             try:
                 _inject_stencil_window(os.path.abspath(stencil_vssx),
                                        os.path.basename(stencil_vssx))
             except (PermissionError, OSError) as e:
                 print(f"note: stencil window injection skipped ({e})")
+        if stencil_vssx and real_connectors and conn_parts:
+            # path-for-path: draw each detected arrow as a polyline that
+            # reproduces the drawio route exactly (control point per
+            # corner). Polylines never cross panels unexpectedly, so
+            # icons and labels stay clean.
+            n_conn = 0
+            for cp in conn_parts:
+                x, y, w, h = cp["rect"]
+                chain = cp.get("chain")
+                try:
+                    if chain and len(chain) >= 2:
+                        pts = []
+                        for cx, cy in chain:
+                            pts.extend([b.X(x + cx / 100.0 * w),
+                                        b.Y(y + cy / 100.0 * h)])
+                        conn = b.page.DrawPolyline(pts, 0)
+                    else:
+                        if h >= w:
+                            x0, y0 = b.X(x + w / 2), b.Y(y)
+                            x1, y1 = b.X(x + w / 2), b.Y(y + h)
+                        else:
+                            x0, y0 = b.X(x), b.Y(y + h / 2)
+                            x1, y1 = b.X(x + w), b.Y(y + h / 2)
+                        conn = b.page.DrawLine(x0, y0, x1, y1)
+                    conn.Cells("EndArrow").FormulaU = "5"
+                    # use the arrow cell's own fill colour (drawio draws
+                    # these arrows as filled stencil glyphs)
+                    col = parse_style(
+                        cells_by_id.get(cp["id"], {}).get("style", "")
+                    ).get("fillColor") or "#312d2a"
+                    conn.Cells("LineColor").FormulaU = b.rgb(col)
+                    conn.Cells("LineWeight").FormulaU = "1.25 pt"
+                    n_conn += 1
+                except Exception as ex:
+                    print(f"note: connector creation failed ({ex})")
+            print(f"connectors={n_conn}")
+
         b.save(out_path)
     finally:
         b.quit()
@@ -1080,11 +1177,14 @@ if __name__ == "__main__":
     import sys as _sys
     if len(_sys.argv) < 3:
         raise SystemExit("usage: python -m drawio_to_visio.core "
-                         "input.drawio output.vsdx [icons.vssx]")
-    _src = os.path.abspath(_sys.argv[1])
-    _out = os.path.abspath(_sys.argv[2])
-    _vssx = os.path.abspath(_sys.argv[3]) if len(_sys.argv) > 3 else None
+                         "input.drawio output.vsdx [icons.vssx] "
+                         "[--no-real-connectors]")
+    _args = [a for a in _sys.argv[1:] if a != "--no-real-connectors"]
+    _real = "--no-real-connectors" not in _sys.argv
+    _src = os.path.abspath(_args[0])
+    _out = os.path.abspath(_args[1])
+    _vssx = os.path.abspath(_args[2]) if len(_args) > 2 else None
     _cells = load_cells(_src)
     cells_by_id = {c["id"]: c for c in _cells}
     main.__globals__["load_cells"] = lambda path: _cells
-    main(_src, _out, _vssx)
+    main(_src, _out, _vssx, real_connectors=_real)

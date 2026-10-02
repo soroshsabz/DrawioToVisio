@@ -22,12 +22,17 @@ def main_visio(argv=None):
         "stencils", nargs="?",
         help="optional .vssx stencil set: enables the two-pass pipeline "
              "where every icon becomes a reusable master instance")
+    parser.add_argument(
+        "--no-real-connectors", action="store_true",
+        help="keep drawn arrow glyphs as stencil line-art instead of the "
+             "default real Visio dynamic connectors")
     args = parser.parse_args(argv)
 
     from .core import main as convert
     convert(os.path.abspath(args.input),
             os.path.abspath(args.output),
-            os.path.abspath(args.stencils) if args.stencils else None)
+            os.path.abspath(args.stencils) if args.stencils else None,
+            real_connectors=not args.no_real_connectors)
     return 0
 
 

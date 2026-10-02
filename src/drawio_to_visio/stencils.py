@@ -35,9 +35,205 @@ MASTER_H = 0.85  # inches, uniform master height
 
 # --------------------------------------------------------------- clustering
 
-def collect(cells, offsets):
-    """Icon candidate cells (stencils of icon-ish size) + label cells."""
-    icon_cells, labels = [], []
+def _is_drawn_arrow(w, h, payload, d2v):
+    """True for hand-drawn directional-arrow stencil glyphs. Every true
+    arrow carries a filled arrowhead (a dense closed loop) plus thin bar
+    segments (the shaft). Chevron strokes, casing-only cells, plain
+    rectangle borders and icon artwork are NOT arrows."""
+    slim = (15 <= w <= 30 and 40 <= h <= 70) or (40 <= w <= 70 and 15 <= h <= 30)
+    try:
+        sel = d2v.decode_stencil(payload)
+        prims, (vb_w, vb_h) = d2v.stencil_primitives(sel, "#000", None)
+    except Exception:
+        return False
+    vb_area = float(vb_w) * float(vb_h) or 1.0
+    dense_small = 0   # dense closed loops = filled arrowheads
+    dense_fat = 0     # arrowheads up to 30% of the stencil area
+    thin_bars = 0     # long thin closed rects = line segments
+    for p in prims:
+        for sp in p["subpaths"]:
+            closed = max(abs(sp[0][0] - sp[-1][0]),
+                         abs(sp[0][1] - sp[-1][1])) < 0.5
+            if not closed:
+                continue
+            n = len(sp)
+            xs = [x for x, _ in sp]
+            ys = [y for _, y in sp]
+            bw = max(xs) - min(xs)
+            bh = max(ys) - min(ys)
+            frac = (bw * bh) / vb_area
+            if n >= 20:
+                # small dense loop = arrowhead (icons have big dense loops)
+                if frac <= 0.10:
+                    dense_small += 1
+                elif frac <= 0.30:
+                    dense_fat += 1
+            elif n <= 8:
+                aspect = max(bw, bh) / max(min(bw, bh), 1e-6)
+                if aspect >= 4.0 and frac <= 0.15:
+                    thin_bars += 1
+
+    # signature (b): elbow arrow = small arrowhead + thin line segments;
+    # small slim glyphs (<=40 px) may be a single fat-headed shaft arrow
+    small_slim = (max(w, h) <= 40 and min(w, h) <= 20
+                  and max(w, h) / max(min(w, h), 1) >= 1.8)
+    if small_slim:
+        return (dense_small >= 1 or dense_fat >= 1) and thin_bars >= 1
+    return dense_small >= 1 and thin_bars >= 2
+
+
+def _has_arrowhead(payload, d2v):
+    """True if the stencil contains a dense closed loop = filled
+    arrowhead. Chevron/casing strokes have none."""
+    try:
+        sel = d2v.decode_stencil(payload)
+        prims, (vw, vh) = d2v.stencil_primitives(sel, "#000", None)
+    except Exception:
+        return False
+    area = float(vw) * float(vh) or 1.0
+    for p in prims:
+        for sp in p["subpaths"]:
+            if max(abs(sp[0][0] - sp[-1][0]),
+                   abs(sp[0][1] - sp[-1][1])) >= 0.5:
+                continue
+            if len(sp) < 20:
+                continue
+            xs = [x for x, _ in sp]
+            ys = [y for _, y in sp]
+            if (max(xs) - min(xs)) * (max(ys) - min(ys)) / area <= 0.30:
+                return True
+    return False
+
+
+def arrow_chain(payload, d2v):
+    """Extract the drawn arrow's centerline chain (in viewBox coordinates,
+    0-100) from its stencil: thin bar segments chained end-to-end plus the
+    arrowhead position. Returns (chain, head_frac) or (None, None)."""
+    import math
+    try:
+        sel = d2v.decode_stencil(payload)
+        prims, (vw, vh) = d2v.stencil_primitives(sel, "#000", None)
+    except Exception:
+        return None, None
+    segs = []
+    head = None
+    for p in prims:
+        for sp in p["subpaths"]:
+            if max(abs(sp[0][0] - sp[-1][0]),
+                   abs(sp[0][1] - sp[-1][1])) >= 0.5:
+                continue
+            xs = [x for x, _ in sp]
+            ys = [y for _, y in sp]
+            x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+            bw, bh = x1 - x0, y1 - y0
+            n = len(sp)
+            if n >= 20 and bw * bh / (float(vw) * float(vh) or 1) <= 0.10:
+                head = ((x0 + x1) / 2, (y0 + y1) / 2)
+            elif n <= 8:
+                # bar = thin in one axis, long in the other; thickness
+                # tolerance scales with the viewBox (thick-stroke arrows,
+                # e.g. double-line casing pairs up to ~15% of the box)
+                if bw <= max(3, 0.15 * vw) and bh >= 5:
+                    segs.append((((x0 + x1) / 2, y0), ((x0 + x1) / 2, y1)))
+                elif bh <= max(3, 0.15 * vh) and bw >= 5:
+                    segs.append(((x0, (y0 + y1) / 2), (x1, (y0 + y1) / 2)))
+    if not head or not segs:
+        return None, None
+
+    def dist(a, b):
+        return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+
+    hc = head
+    start = max(((pt, i) for i, s in enumerate(segs) for pt in s),
+                key=lambda t: dist(t[0], hc))
+    used = [False] * len(segs)
+    s = segs[start[1]]
+    if dist(s[0], hc) > dist(s[1], hc):
+        chain = [s[0], s[1]]
+    else:
+        chain = [s[1], s[0]]
+    used[start[1]] = True
+    cur = chain[-1]
+    inc = (chain[-1][0] - chain[0][0], chain[-1][1] - chain[0][1])
+    il = math.hypot(*inc) or 1.0
+    inc = (inc[0] / il, inc[1] / il)
+    tol2 = 49.0   # 7 viewBox units squared (stub gaps)
+    while True:
+        best = None   # prefer perpendicular turns at junctions
+        for i, sg in enumerate(segs):
+            if used[i]:
+                continue
+            for j, pt in enumerate(sg):
+                if dist(pt, cur) < tol2:
+                    out = (sg[1 - j][0] - pt[0], sg[1 - j][1] - pt[1])
+                    ol = math.hypot(*out) or 1.0
+                    dot = abs((inc[0] * out[0] + inc[1] * out[1]) / ol)
+                    # reject collinear continuation (casing/line pair);
+                    # keep the most perpendicular candidate
+                    if dot > 0.9:
+                        continue
+                    far_d = dist(sg[1 - j], hc)
+                    cand = (dot, far_d, sg[1 - j], i)
+                    if best is None or (cand[0], cand[1]) <                             (best[0], best[1]):
+                        best = cand
+                    break
+        if best is None:
+            # no perpendicular candidate: allow collinear fallback
+            for i, sg in enumerate(segs):
+                if used[i]:
+                    continue
+                for j, pt in enumerate(sg):
+                    if dist(pt, cur) < tol2:
+                        best = (2.0, dist(sg[1 - j], hc), sg[1 - j], i)
+                        break
+                if best:
+                    break
+        if best is None:
+            break
+        chain.append(best[2])
+        used[best[3]] = True
+        cur = best[2]
+        inc = (cur[0] - chain[-2][0], cur[1] - chain[-2][1])
+        il = math.hypot(*inc) or 1.0
+        inc = (inc[0] / il, inc[1] / il)
+    # extend from the far end too (junction ties may start mid-path)
+    while True:
+        cur = chain[0]
+        inc = (chain[1][0] - cur[0], chain[1][1] - cur[1])
+        il = math.hypot(*inc) or 1.0
+        inc = (inc[0] / il, inc[1] / il)
+        best = None
+        for i, sg in enumerate(segs):
+            if used[i]:
+                continue
+            for j, pt in enumerate(sg):
+                if dist(pt, cur) < tol2:
+                    out = (sg[1 - j][0] - pt[0], sg[1 - j][1] - pt[1])
+                    ol = math.hypot(*out) or 1.0
+                    dot = abs((inc[0] * out[0] + inc[1] * out[1]) / ol)
+                    far_d = dist(sg[1 - j], hc)
+                    cand = (dot, far_d, sg[1 - j], i)
+                    if best is None or (cand[0], cand[1]) <                             (best[0], best[1]):
+                        best = cand
+                    break
+        if best is None:
+            break
+        chain.insert(0, best[2])
+        used[best[3]] = True
+    if dist(chain[-1], hc) > dist(chain[0], hc):
+        chain.reverse()
+    return chain, (head[0] / float(vw), head[1] / float(vh))
+
+
+def collect(cells, offsets, real_connectors=True):
+    """Icon candidate cells (stencils of icon-ish size) + label cells.
+
+    With ``real_connectors`` (the default) SLIM ARROW CELLS ARE ONLY pulled
+    out as connectors when they are standalone: an arrow sitting inside a
+    larger icon cell is icon artwork (e.g. a hexagon with three arrows) and
+    must stay line-art, otherwise icons get corrupted."""
+    icon_cells, labels, conn_parts = [], [], []
+    # first pass: collect every icon candidate (needed as the "host" index)
     for c in cells:
         if not c["vertex"]:
             continue
@@ -53,10 +249,90 @@ def collect(cells, offsets):
                                "fill": style.get("fillColor"),
                                "stroke": style.get("strokeColor"),
                                "payload": mm.group(1)})
+            continue
         txt = re.sub(r"<[^>]+>", " ", c["label"] or "").strip()
         if c["label"] and 14 <= h <= 30 and w >= 30 and txt:
             labels.append({"id": c["id"], "rect": r, "text": txt})
-    return icon_cells, labels
+    # second pass: classify standalone arrow cells as connector replacements
+    if real_connectors:
+        # cluster bboxes: union of adjacent/overlapping icon cells. Arrows
+        # whose centre falls inside a cluster bbox are that icon's artwork
+        # (e.g. the Decision capture chevrons are separate stencil cells
+        # but belong to the icon).
+        GAP = 6.0
+        clusters = []           # list of [x0, y0, x1, y1]
+        def _add_to_clusters(x0, y0, x1, y1):
+            hit = None
+            for cl in clusters:
+                if (x0 <= cl[2] + GAP and x1 >= cl[0] - GAP
+                        and y0 <= cl[3] + GAP and y1 >= cl[1] - GAP):
+                    hit = cl
+                    break
+            if hit is None:
+                clusters.append([x0, y0, x1, y1])
+                return
+            hit[0] = min(hit[0], x0); hit[1] = min(hit[1], y0)
+            hit[2] = max(hit[2], x1); hit[3] = max(hit[3], y1)
+        for ic in icon_cells:
+            ix, iy, iw, ih = ic["rect"]
+            _add_to_clusters(ix, iy, ix + iw, iy + ih)
+        for c in cells:
+            if not c["vertex"]:
+                continue
+            r = d2v.rect_of(c, offsets)
+            if not r:
+                continue
+            x, y, w, h = r
+            mm = re.search(r"stencil\((.+?)\)", c["style"], re.S)
+            if not (mm and _is_drawn_arrow(w, h, mm.group(1), d2v)):
+                continue
+            cx, cy = x + w / 2.0, y + h / 2.0
+            inside_icon = False
+            for ic in icon_cells:
+                ix, iy, iw, ih = ic["rect"]
+                if (ix <= cx <= ix + iw and iy <= cy <= iy + ih
+                        and iw * ih > w * h * 1.5):
+                    inside_icon = True
+                    break
+            if not inside_icon and not _has_arrowhead(mm.group(1), d2v):
+                # no arrowhead: likely a chevron/casing stroke belonging
+                # to a nearby icon - guard against stealing icon parts
+                for cl in clusters:
+                    if (cl[0] <= cx <= cl[2] and cl[1] <= cy <= cl[3]
+                            and (cl[2] - cl[0]) * (cl[3] - cl[1])
+                            > w * h * 1.5):
+                        inside_icon = True
+                        break
+            if not inside_icon:
+                # remove from icon set so the glyph is not drawn as well
+                icon_cells[:] = [ic for ic in icon_cells
+                                 if ic["id"] != c["id"]]
+                chain, head = arrow_chain(mm.group(1), d2v)
+                conn_parts.append({"id": c["id"], "rect": r,
+                                   "payload": mm.group(1),
+                                   "chain": chain, "head": head})
+    # dedupe: casing + line pairs describe the SAME arrow (overlap >= 0.6)
+    kept = []
+    for cp in sorted(conn_parts,
+                     key=lambda q: -(q["rect"][2] * q["rect"][3])):
+        ax, ay, aw, ah = cp["rect"]
+        dup = False
+        for kp in kept:
+            bx, by, bw, bh = kp["rect"]
+            # similar size (casing vs line of one arrow) - nested big
+            # loops containing smaller arrows are NOT duplicates
+            ratio = min(aw * ah, bw * bh) / max(aw * ah, bw * bh)
+            if ratio < 0.7:
+                continue
+            ox = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+            oy = max(0, min(ay + ah, by + bh) - max(ay, by))
+            if ox * oy / max(min(aw * ah, bw * bh), 1) >= 0.6:
+                dup = True
+                break
+        if not dup:
+            kept.append(cp)
+    conn_parts = kept
+    return icon_cells, labels, conn_parts
 
 
 def overlap(a, b, pad=2):
@@ -123,7 +399,8 @@ def name_cluster(cl, labels):
 
 # --------------------------------------------------------------- master draw
 
-def draw_cluster_into(editor, cl, cells, offsets, app=None):
+def draw_cluster_into(editor, cl, cells, offsets, app=None,
+                      hole_fill="#FFFFFF"):
     """Draw one icon cluster's cells (big-containers-first order) into a
     master editor page, normalised to the master box."""
     x0 = min(c["rect"][0] for c in cl)
@@ -278,7 +555,8 @@ def draw_cluster_into(editor, cl, cells, offsets, app=None):
                 arr = [c for pt in pts2 for c in pt]
                 return editor.DrawPolyline(arr, 0)
 
-    def paint_compound(subpaths, pfill, pstroke, segsets=None):
+    def paint_compound(subpaths, pfill, pstroke, segsets=None,
+                       hole_fill="#FFFFFF"):
         n = len(subpaths)
 
         def signed_area(pts):
@@ -339,7 +617,7 @@ def draw_cluster_into(editor, cl, cells, offsets, app=None):
 
         plan = []
         for i in range(n):
-            colour = pfill if wind[i] != 0 else "#FFFFFF"
+            colour = pfill if wind[i] != 0 else hole_fill
             plan.append((depth_of(i), i, colour))
         plan.sort(key=lambda t: t[0])
 
@@ -415,7 +693,8 @@ def draw_cluster_into(editor, cl, cells, offsets, app=None):
                 paint_compound([map_pts(sp) for sp in p["subpaths"]],
                                p["fill"], p["stroke"],
                                [map_segs(sg) for sg in p.get("segs", [])
-                                if sg] if p.get("segs") else None)
+                                if sg] if p.get("segs") else None,
+                               hole_fill=hole_fill)
             elif p["kind"] == "rect":
                 rx, ry = cx + p["x"] * sxx, cy + p["y"] * syy
                 shp = editor.DrawRectangle(X(rx), Y(ry + p["h"] * syy),
@@ -430,10 +709,11 @@ def draw_cluster_into(editor, cl, cells, offsets, app=None):
 
 # ------------------------------------------------------------------- main
 
-def main(src, out):
+def main(src, out, real_connectors=True):
     cells = d2v.load_cells(src)
     offsets = d2v.build_offsets(cells)
-    icon_cells, labels = collect(cells, offsets)
+    icon_cells, labels, _conn_parts = collect(
+        cells, offsets, real_connectors=real_connectors)
     clusters = clusters_of(icon_cells)
     uniq = dedupe(clusters)
     print(f"icon cells={len(icon_cells)} clusters={len(clusters)} "
@@ -518,7 +798,8 @@ def _inject_stencil_window(path, own_name):
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         raise SystemExit("usage: python -m drawio_to_visio.stencils "
-                         "input.drawio icons.vssx")
+                         "input.drawio icons.vssx [--no-real-connectors]")
     _src = os.path.abspath(sys.argv[1])
     _out = os.path.abspath(sys.argv[2])
-    main(_src, _out)
+    main(_src, _out,
+         real_connectors="--no-real-connectors" not in sys.argv[3:])

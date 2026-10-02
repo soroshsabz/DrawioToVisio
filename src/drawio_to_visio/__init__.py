@@ -36,10 +36,20 @@ from .stencils import (
     collect,
     dedupe,
     draw_cluster_into,
-    main as extract_stencils,
+    main as _extract_stencils_impl,
     name_cluster,
     overlap,
 )
+
+
+def extract_stencils(src, out, real_connectors=True):
+    """Extract every icon of *src* into the .vssx stencil set *out*.
+
+    With ``real_connectors=True`` slim directional-arrow glyphs are
+    classified as connectors instead of icons (pairs with
+    ``convert(..., real_connectors=True)``)."""
+    return _extract_stencils_impl(src, out,
+                                  real_connectors=real_connectors)
 
 __version__ = "1.0.0"
 
